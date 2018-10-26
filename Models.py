@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from collections import defaultdict
 
 from matplotlib import image
 import os
@@ -107,8 +108,10 @@ class ComplexModel(object):
 
     val_accuracy = []
     
+    dropout_rates = None
+    
     def __init__(self, model, X_train, y_train, X_val, y_val, num_epochs, batch_size, optimizer, scheduler, 
-                 extra_loss_call, regularizer_weights, random_seed = 123):
+                 extra_loss_call, regularizer_weights, random_seed = 123, return_rates=False, verbose=0):
         self.model = model
         self.X_train = X_train
         self.y_train = y_train
@@ -121,6 +124,11 @@ class ComplexModel(object):
         self.extra_loss_call = extra_loss_call
         self.regularizer_weights = regularizer_weights
         self.random_seed = random_seed
+        self.return_rates = return_rates
+        self.verbose = verbose
+        
+        if return_rates:
+            self.dropout_rates = defaultdict(list)
         
     def train(self):
         np.random.seed(self.random_seed)
@@ -144,6 +152,7 @@ class ComplexModel(object):
 
         #try:
         for epoch in range(self.num_epochs):
+            if self.verbose == 1: print('Epoch number {} of {}'.format(epoch+1, self.num_epochs))
             self.model.train(True) # enable dropout / batch_norm training behavior
 
             self.scheduler.step()
@@ -165,7 +174,10 @@ class ComplexModel(object):
 
             if self.extra_loss_call:
                 self.train_extra_loss_per_epoch.append(np.mean(self.train_extra_loss[-self.batch_size :]))
-
+                
+            for i in range(len(self.model)):
+                if isinstance(self.model[i], VariationalDropout):
+                    self.dropout_rates[i].append(self.model[i].probs)
             #########################################
             #       Now lets do validation          #
             #########################################
@@ -178,18 +190,22 @@ class ComplexModel(object):
                 self.val_batch_acc.append(torch.sum(y_batch == y_pred).cpu().data.numpy() / y_batch.shape[0])
 
             self.val_accuracy.append(np.mean(np.array(self.val_batch_acc)))
-
-        if self.extra_loss_call:
-            return self.train_loss_per_epoch, self.train_extra_loss_per_epoch, self.val_accuracy
+        if not self.return_rates:
+            if self.extra_loss_call:
+                return self.train_loss_per_epoch, self.train_extra_loss_per_epoch, self.val_accuracy
+            else:
+                return self.train_loss_per_epoch, self.val_accuracy
         else:
-            return self.train_loss_per_epoch, self.val_accuracy
-    
+            if self.extra_loss_call:
+                return self.train_loss_per_epoch, self.train_extra_loss_per_epoch, self.val_accuracy, self.dropout_rates
+            else:
+                return self.train_loss_per_epoch, self.val_accuracy, self.dropout_rates
     def plot(self):
         # Create some mock data
         objective = np.array(self.train_loss_per_epoch)
         if self.extra_loss_call:
             objective = objective + self.regularizer_weights * np.array(self.train_extra_loss_per_epoch)
-        fig, ax1 = plt.subplots()
+        fig, ax1 = plt.subplots(figsize=(12,10))
 
         color = 'tab:red'
         ax1.set_xlabel('# epoch')
